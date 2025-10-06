@@ -1,0 +1,37 @@
+windows:
+  elo_deltas: [26w, 52w]
+  last_matches: 10
+  rating_window: 52w
+
+caps:
+  h2h_max_matches: 5
+  winsorize_quantiles: [0.01, 0.99]
+  max_days_since_match: 365
+  min_matches_for_rating: 5
+
+symmetry:
+  make_mirrored_row: true
+
+# Feature engineering settings
+features:
+  elo:
+    k_factor: 32
+    decay_factor: 0.95
+    surfaces: ["hard", "clay", "grass", "carpet"]
+    
+  serve_return:
+    min_matches: 3
+    rolling_window: 10
+    
+  demographics:
+    age_buckets: [20, 23, 26, 29, 32, 35]
+    experience_thresholds: [50, 150, 300]
+    
+  form:
+    fatigue_threshold: 2  # days
+    layoff_threshold: 60  # days
+    
+  context:
+    surfaces: ["hard", "clay", "grass", "carpet"]
+    levels: ["Grand Slam", "ATP Masters 1000", "ATP 500", "ATP 250"]
+    rounds: ["F", "SF", "QF", "R16", "R32", "R64", "R128"]

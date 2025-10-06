@@ -1,0 +1,45 @@
+data_root: ./data
+raw_dir: ${data_root}/raw
+processed_dir: ${data_root}/processed
+features_dir: ${data_root}/features
+duckdb_path: ${data_root}/tennis.duckdb
+
+sources:
+  # Primary match data sources
+  atp_matches: "<PATH_OR_URL_PLACEHOLDER>"  # Jeff Sackmann's ATP data
+  matches: "<PATH_OR_URL_PLACEHOLDER>"
+  players: "<PATH_OR_URL_PLACEHOLDER>"
+  stats: "<PATH_OR_URL_PLACEHOLDER>"
+  
+  # Tennis Abstract webscraping URLs
+  tennis_abstract:
+    serve_leaders: "https://tennisabstract.com/reports/mcp_leaders_serve_men_last52.html"
+    return_leaders: "https://tennisabstract.com/reports/mcp_leaders_return_men_last52.html"
+    rally_leaders: "https://tennisabstract.com/reports/mcp_leaders_rally_men_last52.html"
+    tactics_leaders: "https://tennisabstract.com/reports/mcp_leaders_tactics_men_last52.html"
+    
+  # Additional data sources
+  odds_portal: "<ODDS_DATA_PLACEHOLDER>"
+  flashscore: "<FLASHSCORE_PLACEHOLDER>"
+  
+# Webscraping settings
+webscraping:
+  enabled: true
+  selenium:
+    headless: true
+    timeout: 10
+    retry_attempts: 3
+  rate_limiting:
+    delay_seconds: 2
+    max_requests_per_minute: 30
+  output_format: "csv"  # csv, parquet, json
+
+# Data validation settings
+validation:
+  strict_mode: true
+  check_dates: true
+  
+# Date range settings
+date_range:
+  min_year: 2000
+  max_year: 2024
