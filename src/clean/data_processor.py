@@ -1,359 +1,285 @@
 """
-Tennis Data Processing Pipeline
-Standardizes player names, creates player IDs, and cleans all tennis datasets
+Data Processor
+Cleans and normalizes tennis data from multiple sources
 """
 
 import pandas as pd
 import numpy as np
-import hashlib
-import re
 from pathlib import Path
-from datetime import datetime
-import warnings
-warnings.filterwarnings('ignore')
+import re
+
 
 class TennisDataProcessor:
-    def __init__(self, data_folder):
+    def __init__(self, data_folder="data"):
         self.data_folder = Path(data_folder)
-        self.raw_folder = self.data_folder / "raw"
         self.processed_folder = self.data_folder / "processed"
         self.processed_folder.mkdir(exist_ok=True)
         
-        # Player normalization mapping
-        self.player_normalization = {}
-        self.players_db = {}  # playerId -> {name, hand, birthyear}
-        
     def normalize_player_name(self, name):
-        """Standardize player names for consistent identification"""
-        if pd.isna(name) or name == "":
+        """Normalize player names for consistency"""
+        if pd.isna(name):
             return None
-            
-        # Remove extra whitespace and convert to title case
-        name = str(name).strip()
         
-        # Handle common abbreviations and formats
-        name = re.sub(r'\s+', ' ', name)  # Multiple spaces to single
+        # Remove extra whitespace
+        name = ' '.join(name.split())
         
-        # Common name format fixes
-        # "Lastname F." -> "F. Lastname" 
-        if re.match(r'^[A-Z][a-z]+ [A-Z]\.$', name):
-            parts = name.split()
-            name = f"{parts[1]} {parts[0]}"
-        
-        # Handle "Lastname First" -> "First Lastname"
-        # This is tricky, we'll keep current format but standardize case
-        name = ' '.join(word.capitalize() for word in name.split())
+        # Standardize format: "Last F." -> "F. Last"
+        # Example: "Federer R." -> "R. Federer"
+        parts = name.split()
+        if len(parts) == 2 and parts[1].endswith('.'):
+            return f"{parts[1]} {parts[0]}"
         
         return name
     
-    def create_player_id(self, name):
-        """Create consistent player ID using hash of normalized name"""
-        if not name:
-            return None
-        normalized = self.normalize_player_name(name)
-        if not normalized:
-            return None
-        # Create 8-character hash
-        return hashlib.md5(normalized.encode()).hexdigest()[:8]
-    
-    def extract_players_from_match_data(self, df):
-        """Extract unique players from match data"""
-        players = set()
-        
-        # Get players from Player_1 and Player_2 columns
-        if 'Player_1' in df.columns:
-            players.update(df['Player_1'].dropna().unique())
-        if 'Player_2' in df.columns:
-            players.update(df['Player_2'].dropna().unique())
-        if 'Winner' in df.columns:
-            players.update(df['Winner'].dropna().unique())
-            
-        return players
-    
-    def extract_players_from_performance_data(self, df):
-        """Extract players from performance datasets"""
-        players = set()
-        if 'Player' in df.columns:
-            players.update(df['Player'].dropna().unique())
-        return players
-    
-    def build_players_database(self):
-        """Build comprehensive players database from all datasets"""
-        print("Building players database...")
-        all_players = set()
-        
-        # Load main match data
-        try:
-            atp_df = pd.read_csv(self.raw_folder / "atp_tennis.csv")
-            all_players.update(self.extract_players_from_match_data(atp_df))
-            print(f"Found {len(all_players)} players from ATP matches")
-        except FileNotFoundError:
-            print("atp_tennis.csv not found")
-        
-        # Load performance data
-        performance_files = [
-            "serve_leaders.csv", "return_leaders.csv", 
-            "rally_leaders.csv", "tactics_leaders.csv"
-        ]
-        
-        for file in performance_files:
-            try:
-                df = pd.read_csv(self.raw_folder / file)
-                players_from_file = self.extract_players_from_performance_data(df)
-                all_players.update(players_from_file)
-                print(f"Added {len(players_from_file)} players from {file}")
-            except FileNotFoundError:
-                print(f"{file} not found")
-        
-        # Create players database
-        players_data = []
-        for player_name in all_players:
-            if player_name and pd.notna(player_name):
-                normalized_name = self.normalize_player_name(player_name)
-                if normalized_name:
-                    player_id = self.create_player_id(normalized_name)
-                    players_data.append({
-                        'player_id': player_id,
-                        'name': normalized_name,
-                        'hand': None,  # To be filled from additional data sources
-                        'birth_year': None  # To be filled from additional data sources
-                    })
-        
-        # Remove duplicates based on player_id
-        players_df = pd.DataFrame(players_data).drop_duplicates('player_id')
-        
-        # Create mapping for quick lookups
-        self.player_id_mapping = dict(zip(players_df['name'], players_df['player_id']))
-        
-        # Save players table
-        players_df.to_csv(self.processed_folder / "players.csv", index=False)
-        print(f"Created players.csv with {len(players_df)} unique players")
-        
-        return players_df
-    
-    def standardize_surface(self, surface):
-        """Standardize surface labels"""
+    def normalize_surface(self, surface):
+        """Standardize surface names"""
         if pd.isna(surface):
             return None
-            
-        surface = str(surface).strip().lower()
         
-        surface_mapping = {
+        surface = surface.lower().strip()
+        
+        surface_map = {
             'hard': 'Hard',
-            'clay': 'Clay', 
+            'clay': 'Clay',
             'grass': 'Grass',
-            'carpet': 'Carpet',
-            'acrylic': 'Hard',
-            'decoturf': 'Hard',
-            'plexicushion': 'Hard',
-            'rebound ace': 'Hard',
-            'greenset': 'Hard'
+            'carpet': 'Carpet'
         }
         
-        return surface_mapping.get(surface, 'Hard')  # Default to Hard
+        return surface_map.get(surface, surface.capitalize())
     
-    def standardize_round(self, round_str):
-        """Standardize round names"""
-        if pd.isna(round_str):
-            return None
-            
-        round_str = str(round_str).strip()
+    def load_match_data(self):
+        """Load the main ATP match dataset"""
+        print("Loading ATP match data...")
         
-        round_mapping = {
-            '1st Round': 'R1',
-            '2nd Round': 'R2', 
-            '3rd Round': 'R3',
-            '4th Round': 'R4',
-            'Round of 128': 'R1',
-            'Round of 64': 'R2',
-            'Round of 32': 'R3',
-            'Round of 16': 'R4',
-            'Quarterfinals': 'QF',
-            'Quarter-finals': 'QF',
-            'Semifinals': 'SF',
-            'Semi-finals': 'SF',
-            'The Final': 'F',
-            'Final': 'F',
-            'Finals': 'F'
-        }
+        matches_file = self.data_folder / "atp_tennis.csv"
+        if not matches_file.exists():
+            raise FileNotFoundError(f"Match data not found: {matches_file}")
         
-        return round_mapping.get(round_str, round_str)
-    
-    def process_matches_data(self):
-        """Process main ATP matches data"""
-        print("\nProcessing ATP matches data...")
+        df = pd.read_csv(matches_file)
         
-        try:
-            df = pd.read_csv(self.raw_folder / "atp_tennis.csv")
-            print(f"Loaded {len(df)} matches")
-        except FileNotFoundError:
-            print("atp_tennis.csv not found")
-            return None
+        # Normalize column names
+        df.columns = df.columns.str.lower().str.replace(' ', '_')
         
-        # Rename columns to standard format
-        column_mapping = {
-            'Tournament': 'tournament',
-            'Date': 'date', 
-            'Series': 'level',
-            'Court': 'court',
-            'Surface': 'surface',
-            'Round': 'round',
-            'Best of': 'best_of',
-            'Player_1': 'player1',
-            'Player_2': 'player2', 
-            'Winner': 'winner',
-            'Rank_1': 'rank1',
-            'Rank_2': 'rank2',
-            'Pts_1': 'pts1',
-            'Pts_2': 'pts2',
-            'Odd_1': 'odd1',
-            'Odd_2': 'odd2',
-            'Score': 'score'
-        }
-        
-        df = df.rename(columns=column_mapping)
-        
-        # Convert date
+        # Parse dates
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
         
-        # Standardize surface
-        df['surface'] = df['surface'].apply(self.standardize_surface)
+        # Normalize player names
+        df['player_1'] = df['player_1'].apply(self.normalize_player_name)
+        df['player_2'] = df['player_2'].apply(self.normalize_player_name)
+        df['winner'] = df['winner'].apply(self.normalize_player_name)
         
-        # Standardize round
-        df['round'] = df['round'].apply(self.standardize_round)
+        # Normalize surface
+        df['surface'] = df['surface'].apply(self.normalize_surface)
         
-        # Convert best_of to integer
-        df['best_of'] = pd.to_numeric(df['best_of'], errors='coerce')
+        # Clean ranks (convert to int, handle missing)
+        df['rank_1'] = pd.to_numeric(df['rank_1'], errors='coerce')
+        df['rank_2'] = pd.to_numeric(df['rank_2'], errors='coerce')
         
-        # Replace player names with IDs
-        df['p1_id'] = df['player1'].apply(lambda x: self.player_id_mapping.get(self.normalize_player_name(x)))
-        df['p2_id'] = df['player2'].apply(lambda x: self.player_id_mapping.get(self.normalize_player_name(x)))
-        df['winner_id'] = df['winner'].apply(lambda x: self.player_id_mapping.get(self.normalize_player_name(x)))
-        
-        # Remove rows with missing essential data
-        initial_count = len(df)
-        df = df.dropna(subset=['p1_id', 'p2_id', 'winner_id', 'date'])
-        final_count = len(df)
-        print(f"Removed {initial_count - final_count} incomplete rows")
-        
-        # Sort by date
-        df = df.sort_values('date')
-        
-        # Select final columns
-        final_columns = [
-            'date', 'tournament', 'level', 'round', 'surface', 'best_of',
-            'player1', 'player2', 'winner', 'p1_id', 'p2_id', 'winner_id',
-            'rank1', 'rank2', 'pts1', 'pts2', 'odd1', 'odd2', 'score'
-        ]
-        
-        df = df[final_columns]
-        
-        # Save processed matches
-        df.to_csv(self.processed_folder / "matches.csv", index=False)
-        print(f"Saved {len(df)} processed matches to matches.csv")
+        print(f"Loaded {len(df)} matches from {df['date'].min()} to {df['date'].max()}")
         
         return df
     
-    def process_performance_data(self):
-        """Process serve, return, rally, and tactics data"""
-        print("\nProcessing performance data...")
+    def load_player_stats(self):
+        """Load player statistics from Tennis Abstract"""
+        print("\nLoading player statistics...")
         
-        performance_files = {
-            "serve_leaders.csv": "serve_stats.csv",
-            "return_leaders.csv": "return_stats.csv", 
-            "rally_leaders.csv": "rally_stats.csv",
-            "tactics_leaders.csv": "tactics_stats.csv"
+        stats_files = {
+            'serve': 'serve_leaders.csv',
+            'return': 'return_leaders.csv',
+            'rally': 'rally_leaders.csv',
+            'tactics': 'tactics_leaders.csv'
         }
         
-        for input_file, output_file in performance_files.items():
-            try:
-                df = pd.read_csv(self.raw_folder / input_file)
-                print(f"Processing {input_file}...")
+        stats = {}
+        
+        for stat_type, filename in stats_files.items():
+            filepath = self.data_folder / filename
+            if filepath.exists():
+                df = pd.read_csv(filepath)
                 
-                # Normalize player names and add player IDs
-                df['player_normalized'] = df['Player'].apply(self.normalize_player_name)
-                df['player_id'] = df['player_normalized'].apply(lambda x: self.player_id_mapping.get(x))
+                # Normalize player names
+                df['Player'] = df['Player'].apply(self.normalize_player_name)
                 
-                # Remove rows without player IDs
-                initial_count = len(df)
-                df = df.dropna(subset=['player_id'])
-                final_count = len(df)
+                # Add prefix to all stat columns except Player
+                df.columns = [col if col == 'Player' 
+                             else f"{stat_type}_{col.lower().replace(' ', '_').replace('%', 'pct')}"
+                             for col in df.columns]
                 
-                if initial_count > final_count:
-                    print(f"  Removed {initial_count - final_count} rows with unmatched players")
-                
-                # Clean column names - remove special characters and standardize
-                def clean_column_name(col):
-                    # Remove special characters and normalize spaces
-                    col = re.sub(r'[^\w\s%]', '', str(col))
-                    col = re.sub(r'\s+', '_', col.strip())
-                    col = col.lower()
-                    return col
-                
-                # Rename columns
-                new_columns = {}
-                for col in df.columns:
-                    if col not in ['Player', 'player_normalized', 'player_id']:
-                        new_columns[col] = clean_column_name(col)
-                
-                df = df.rename(columns=new_columns)
-                
-                # Reorder columns to put player info first
-                cols = ['player_id', 'player_normalized'] + [col for col in df.columns if col not in ['Player', 'player_id', 'player_normalized']]
-                df = df[cols]
-                
-                # Drop original player column
-                df = df.drop('Player', axis=1, errors='ignore')
-                
-                # Save processed data
-                df.to_csv(self.processed_folder / output_file, index=False)
-                print(f"  Saved {len(df)} records to {output_file}")
-                
-            except FileNotFoundError:
-                print(f"  {input_file} not found, skipping...")
-            except Exception as e:
-                print(f"  Error processing {input_file}: {e}")
+                stats[stat_type] = df
+                print(f"  Loaded {len(df)} players from {filename}")
+            else:
+                print(f"  Warning: {filename} not found")
+        
+        return stats
     
-    def generate_summary_report(self):
-        """Generate a summary report of the processing"""
-        print("\n" + "="*50)
-        print("DATA PROCESSING SUMMARY")
-        print("="*50)
+    def create_player_mapping(self, matches_df, stats_dict):
+        """Create unified player ID mapping"""
+        print("\nCreating player mapping...")
         
-        # Check processed files
-        processed_files = list(self.processed_folder.glob("*.csv"))
+        # Get all unique players from matches
+        players_from_matches = set()
+        players_from_matches.update(matches_df['player_1'].dropna().unique())
+        players_from_matches.update(matches_df['player_2'].dropna().unique())
         
-        for file in processed_files:
-            try:
-                df = pd.read_csv(file)
-                print(f"{file.name}: {len(df)} rows, {len(df.columns)} columns")
-            except Exception as e:
-                print(f"{file.name}: Error reading - {e}")
+        # Get all unique players from stats
+        players_from_stats = set()
+        for stat_df in stats_dict.values():
+            players_from_stats.update(stat_df['Player'].dropna().unique())
         
-        print("="*50)
-        print("Processing complete!")
+        # Combine all players
+        all_players = sorted(players_from_matches | players_from_stats)
+        
+        # Create player ID mapping
+        player_mapping = pd.DataFrame({
+            'player_id': range(1, len(all_players) + 1),
+            'player_name': all_players
+        })
+        
+        print(f"Created mapping for {len(player_mapping)} unique players")
+        print(f"  From matches: {len(players_from_matches)}")
+        print(f"  From stats: {len(players_from_stats)}")
+        
+        return player_mapping
     
-    def run_full_pipeline(self):
+    def process_matches(self, matches_df, player_mapping):
+        """Add player IDs to match data"""
+        print("\nProcessing match data...")
+        
+        # Create player name to ID mapping
+        name_to_id = dict(zip(player_mapping['player_name'], 
+                             player_mapping['player_id']))
+        
+        # Add player IDs
+        matches_df['p1_id'] = matches_df['player_1'].map(name_to_id)
+        matches_df['p2_id'] = matches_df['player_2'].map(name_to_id)
+        matches_df['winner_id'] = matches_df['winner'].map(name_to_id)
+        
+        # Calculate loser_id
+        matches_df['loser_id'] = matches_df.apply(
+            lambda row: row['p2_id'] if row['winner_id'] == row['p1_id'] else row['p1_id'],
+            axis=1
+        )
+        
+        # Clean up column names for consistency
+        matches_df = matches_df.rename(columns={
+            'rank_1': 'p1_rank',
+            'rank_2': 'p2_rank',
+            'pts_1': 'p1_points',
+            'pts_2': 'p2_points',
+            'odd_1': 'p1_odds',
+            'odd_2': 'p2_odds',
+            'series': 'level',
+            'best_of': 'best_of'
+        })
+        
+        # Select and order columns
+        columns = [
+            'date', 'tournament', 'level', 'surface', 'round', 'best_of',
+            'player_1', 'player_2', 'winner',
+            'p1_id', 'p2_id', 'winner_id', 'loser_id',
+            'p1_rank', 'p2_rank', 'p1_points', 'p2_points',
+            'p1_odds', 'p2_odds', 'score'
+        ]
+        
+        matches_df = matches_df[columns]
+        
+        # Remove matches with missing player IDs
+        before = len(matches_df)
+        matches_df = matches_df.dropna(subset=['p1_id', 'p2_id', 'winner_id'])
+        after = len(matches_df)
+        
+        if before > after:
+            print(f"  Removed {before - after} matches with unmapped players")
+        
+        print(f"Processed {len(matches_df)} matches")
+        
+        return matches_df
+    
+    def merge_player_stats(self, player_mapping, stats_dict):
+        """Merge all player statistics into one dataframe"""
+        print("\nMerging player statistics...")
+        
+        # Start with player mapping
+        player_stats = player_mapping.copy()
+        
+        # Merge each stat type
+        for stat_type, stat_df in stats_dict.items():
+            # Rename Player column to player_name for merging
+            stat_df = stat_df.rename(columns={'Player': 'player_name'})
+            
+            # Merge
+            player_stats = player_stats.merge(
+                stat_df,
+                on='player_name',
+                how='left'
+            )
+            
+            print(f"  Merged {stat_type} stats: {len(stat_df)} players matched")
+        
+        print(f"Final player stats: {len(player_stats)} players, {len(player_stats.columns)} columns")
+        
+        return player_stats
+    
+    def save_processed_data(self, matches_df, player_stats):
+        """Save processed data to CSV files"""
+        print("\nSaving processed data...")
+        
+        # Save matches
+        matches_file = self.processed_folder / "matches.csv"
+        matches_df.to_csv(matches_file, index=False)
+        print(f"  Saved matches: {matches_file}")
+        
+        # Save player stats
+        players_file = self.processed_folder / "players.csv"
+        player_stats.to_csv(players_file, index=False)
+        print(f"  Saved players: {players_file}")
+        
+        # Print summary statistics
+        print("\n" + "="*60)
+        print("DATA PROCESSING COMPLETE")
+        print("="*60)
+        print(f"\nMatches: {len(matches_df)}")
+        print(f"  Date range: {matches_df['date'].min()} to {matches_df['date'].max()}")
+        print(f"  Surfaces: {matches_df['surface'].value_counts().to_dict()}")
+        print(f"  Tournaments: {matches_df['tournament'].nunique()}")
+        
+        print(f"\nPlayers: {len(player_stats)}")
+        print(f"  With serve stats: {player_stats['serve_matches'].notna().sum()}")
+        print(f"  With return stats: {player_stats['return_matches'].notna().sum()}")
+        print(f"  With rally stats: {player_stats['rally_matches'].notna().sum()}")
+        print(f"  With tactics stats: {player_stats['tactics_matches'].notna().sum()}")
+        
+        print("\nSample match data:")
+        print(matches_df.head())
+        
+        print("\nSample player data:")
+        print(player_stats[['player_id', 'player_name', 'serve_matches', 'return_matches']].head())
+    
+    def run(self):
         """Run the complete data processing pipeline"""
-        print("Starting Tennis Data Processing Pipeline...")
-        print("="*50)
+        print("="*60)
+        print("TENNIS DATA PROCESSOR")
+        print("="*60)
         
-        # Step 1: Build players database
-        self.build_players_database()
+        # Load data
+        matches_df = self.load_match_data()
+        stats_dict = self.load_player_stats()
         
-        # Step 2: Process matches data  
-        self.process_matches_data()
+        # Create player mapping
+        player_mapping = self.create_player_mapping(matches_df, stats_dict)
         
-        # Step 3: Process performance data
-        self.process_performance_data()
+        # Process matches with player IDs
+        matches_df = self.process_matches(matches_df, player_mapping)
         
-        # Step 4: Generate summary
-        self.generate_summary_report()
+        # Merge player statistics
+        player_stats = self.merge_player_stats(player_mapping, stats_dict)
+        
+        # Save processed data
+        self.save_processed_data(matches_df, player_stats)
+        
+        return matches_df, player_stats
+
 
 if __name__ == "__main__":
-    # Initialize processor
-    data_folder = Path(__file__).parent.parent.parent / "data"
-    processor = TennisDataProcessor(data_folder)
-    
-    # Run full pipeline
-    processor.run_full_pipeline()
+    processor = TennisDataProcessor()
+    matches, players = processor.run()

@@ -1,0 +1,269 @@
+"""
+Feature Engineering Pipeline
+Builds ML-ready feature matrix from cleaned data
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from datetime import timedelta
+
+
+class FeatureBuilder:
+    def __init__(self, data_folder="data"):
+        self.data_folder = Path(data_folder)
+        self.processed_folder = self.data_folder / "processed"
+        self.features_folder = self.data_folder / "features"
+        self.features_folder.mkdir(exist_ok=True)
+        
+    def load_data(self):
+        """Load all processed datasets"""
+        print("Loading processed data...")
+        
+        # Load matches
+        self.matches = pd.read_csv(self.processed_folder / "matches.csv")
+        self.matches['date'] = pd.to_datetime(self.matches['date'])
+        print(f"  Loaded {len(self.matches)} matches")
+        
+        # Load Elo ratings
+        elo_file = self.features_folder / "match_ratings.csv"
+        if elo_file.exists():
+            self.match_ratings = pd.read_csv(elo_file)
+            self.match_ratings['date'] = pd.to_datetime(self.match_ratings['date'])
+            print(f"  Loaded {len(self.match_ratings)} Elo ratings")
+        else:
+            print("  Warning: Elo ratings not found. Run elo_system.py first")
+            self.match_ratings = None
+        
+        # Load player stats
+        players_file = self.processed_folder / "players.csv"
+        if players_file.exists():
+            self.players = pd.read_csv(players_file)
+            print(f"  Loaded {len(self.players)} players with stats")
+        else:
+            print("  Warning: Player stats not found")
+            self.players = None
+    
+    def calculate_recent_form(self, player_id, date, days=90):
+        """Calculate win% in last N days"""
+        cutoff = date - timedelta(days=days)
+        
+        # Get matches for this player before this date
+        player_matches = self.matches[
+            ((self.matches['p1_id'] == player_id) | 
+             (self.matches['p2_id'] == player_id)) &
+            (self.matches['date'] >= cutoff) &
+            (self.matches['date'] < date)
+        ]
+        
+        if len(player_matches) == 0:
+            return None, 0
+        
+        wins = len(player_matches[player_matches['winner_id'] == player_id])
+        return wins / len(player_matches), len(player_matches)
+    
+    def calculate_surface_record(self, player_id, surface, date):
+        """Calculate win% on specific surface"""
+        surface_matches = self.matches[
+            ((self.matches['p1_id'] == player_id) | 
+             (self.matches['p2_id'] == player_id)) &
+            (self.matches['surface'] == surface) &
+            (self.matches['date'] < date)
+        ]
+        
+        if len(surface_matches) == 0:
+            return None, 0
+        
+        wins = len(surface_matches[surface_matches['winner_id'] == player_id])
+        return wins / len(surface_matches), len(surface_matches)
+    
+    def calculate_h2h(self, p1_id, p2_id, date):
+        """Calculate head-to-head record"""
+        h2h_matches = self.matches[
+            (((self.matches['p1_id'] == p1_id) & (self.matches['p2_id'] == p2_id)) |
+             ((self.matches['p1_id'] == p2_id) & (self.matches['p2_id'] == p1_id))) &
+            (self.matches['date'] < date)
+        ]
+        
+        if len(h2h_matches) == 0:
+            return None, 0
+        
+        p1_wins = len(h2h_matches[h2h_matches['winner_id'] == p1_id])
+        return p1_wins / len(h2h_matches), len(h2h_matches)
+    
+    def get_player_stats(self, player_id, stat_prefix):
+        """Get player stats by prefix (serve, return, rally, tactics)"""
+        if self.players is None:
+            return {}
+        
+        player_row = self.players[self.players['player_id'] == player_id]
+        if len(player_row) == 0:
+            return {}
+        
+        player_row = player_row.iloc[0]
+        
+        # Get all columns with this prefix
+        stat_cols = [col for col in self.players.columns if col.startswith(stat_prefix)]
+        stats = {}
+        for col in stat_cols:
+            val = player_row[col]
+            if pd.notna(val):
+                stats[col] = val
+        
+        return stats
+    
+    def build_feature_matrix(self):
+        """Build complete feature matrix for ML"""
+        print("\nBuilding feature matrix...")
+        
+        features = []
+        total = len(self.matches)
+        
+        for idx, match in self.matches.iterrows():
+            if idx % 5000 == 0:
+                print(f"  Processing match {idx}/{total} ({100*idx/total:.1f}%)")
+            
+            p1_id = match['p1_id']
+            p2_id = match['p2_id']
+            date = match['date']
+            surface = match['surface']
+            winner_id = match['winner_id']
+            
+            # Base features
+            feature_row = {
+                'match_id': idx,
+                'date': date,
+                'p1_id': p1_id,
+                'p2_id': p2_id,
+                'surface': surface,
+                'level': match['level'],
+                'best_of': match['best_of'],
+                'round': match['round'],
+            }
+            
+            # Elo features
+            if self.match_ratings is not None:
+                # Match on date and players
+                match_elo = self.match_ratings[
+                    (self.match_ratings['date'] == date) &
+                    (((self.match_ratings['winner_id'] == p1_id) & (self.match_ratings['loser_id'] == p2_id)) |
+                     ((self.match_ratings['winner_id'] == p2_id) & (self.match_ratings['loser_id'] == p1_id)))
+                ]
+                
+                if len(match_elo) > 0:
+                    elo_row = match_elo.iloc[0]
+                    
+                    # Determine which player is which
+                    if elo_row['winner_id'] == p1_id:
+                        feature_row['p1_elo_overall'] = elo_row['winner_elo_overall']
+                        feature_row['p1_elo_surface'] = elo_row['winner_elo_surface']
+                        feature_row['p2_elo_overall'] = elo_row['loser_elo_overall']
+                        feature_row['p2_elo_surface'] = elo_row['loser_elo_surface']
+                    else:
+                        feature_row['p1_elo_overall'] = elo_row['loser_elo_overall']
+                        feature_row['p1_elo_surface'] = elo_row['loser_elo_surface']
+                        feature_row['p2_elo_overall'] = elo_row['winner_elo_overall']
+                        feature_row['p2_elo_surface'] = elo_row['winner_elo_surface']
+                    
+                    feature_row['elo_diff'] = feature_row['p1_elo_overall'] - feature_row['p2_elo_overall']
+                    feature_row['elo_surface_diff'] = feature_row['p1_elo_surface'] - feature_row['p2_elo_surface']
+            
+            # Form features
+            p1_form, p1_matches = self.calculate_recent_form(p1_id, date, 90)
+            p2_form, p2_matches = self.calculate_recent_form(p2_id, date, 90)
+            feature_row['p1_form_90d'] = p1_form
+            feature_row['p1_matches_90d'] = p1_matches
+            feature_row['p2_form_90d'] = p2_form
+            feature_row['p2_matches_90d'] = p2_matches
+            
+            # Surface record
+            p1_surf_pct, p1_surf_matches = self.calculate_surface_record(p1_id, surface, date)
+            p2_surf_pct, p2_surf_matches = self.calculate_surface_record(p2_id, surface, date)
+            feature_row['p1_surface_win_pct'] = p1_surf_pct
+            feature_row['p1_surface_matches'] = p1_surf_matches
+            feature_row['p2_surface_win_pct'] = p2_surf_pct
+            feature_row['p2_surface_matches'] = p2_surf_matches
+            
+            # Head-to-head
+            h2h_pct, h2h_matches = self.calculate_h2h(p1_id, p2_id, date)
+            feature_row['h2h_p1_win_pct'] = h2h_pct
+            feature_row['h2h_matches'] = h2h_matches
+            
+            # Ranking features
+            feature_row['p1_rank'] = match['p1_rank']
+            feature_row['p2_rank'] = match['p2_rank']
+            if pd.notna(match['p1_rank']) and pd.notna(match['p2_rank']):
+                feature_row['rank_diff'] = match['p1_rank'] - match['p2_rank']
+            
+            # Player-specific stats (for the 68 players)
+            for stat_type in ['serve', 'return', 'rally', 'tactics']:
+                p1_stats = self.get_player_stats(p1_id, stat_type)
+                p2_stats = self.get_player_stats(p2_id, stat_type)
+                
+                for key, val in p1_stats.items():
+                    feature_row[f'p1_{key}'] = val
+                for key, val in p2_stats.items():
+                    feature_row[f'p2_{key}'] = val
+            
+            # Target variable
+            feature_row['p1_won'] = 1 if winner_id == p1_id else 0
+            
+            features.append(feature_row)
+        
+        features_df = pd.DataFrame(features)
+        
+        # Save feature matrix
+        output_path = self.features_folder / "feature_matrix.csv"
+        features_df.to_csv(output_path, index=False)
+        print(f"\n✓ Saved feature matrix: {len(features_df)} rows, {len(features_df.columns)} columns")
+        
+        return features_df
+    
+    def print_summary(self, features_df):
+        """Print feature matrix summary"""
+        print("\n" + "="*60)
+        print("FEATURE ENGINEERING COMPLETE")
+        print("="*60)
+        
+        print(f"\nTotal matches: {len(features_df)}")
+        print(f"Date range: {features_df['date'].min()} to {features_df['date'].max()}")
+        print(f"P1 win rate: {features_df['p1_won'].mean():.2%}")
+        
+        print(f"\nFeatures: {len(features_df.columns)}")
+        print("  - Elo features: elo_diff, elo_surface_diff")
+        print("  - Form features: p1_form_90d, p2_form_90d")
+        print("  - Surface features: p1_surface_win_pct, p2_surface_win_pct")
+        print("  - H2H features: h2h_p1_win_pct, h2h_matches")
+        print("  - Ranking features: p1_rank, p2_rank, rank_diff")
+        
+        # Check how many matches have detailed stats
+        has_serve_stats = features_df[['p1_serve_matches', 'p2_serve_matches']].notna().any(axis=1).sum()
+        print(f"\nMatches with detailed player stats: {has_serve_stats} ({100*has_serve_stats/len(features_df):.1f}%)")
+        
+        print("\nMissing values:")
+        missing = features_df.isnull().sum()
+        missing = missing[missing > 0].sort_values(ascending=False)
+        if len(missing) > 0:
+            print(missing.head(10))
+        else:
+            print("  None!")
+        
+        print("\nSample features:")
+        print(features_df.head())
+    
+    def run(self):
+        """Run the complete feature engineering pipeline"""
+        print("="*60)
+        print("FEATURE ENGINEERING PIPELINE")
+        print("="*60)
+        
+        self.load_data()
+        features_df = self.build_feature_matrix()
+        self.print_summary(features_df)
+        
+        return features_df
+
+
+if __name__ == "__main__":
+    builder = FeatureBuilder()
+    features = builder.run()

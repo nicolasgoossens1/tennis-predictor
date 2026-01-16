@@ -1,84 +1,70 @@
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import csv
 import time
 import os
 
-# Define the output folder for CSV files (relative to your project)
-DATA_FOLDER = os.path.join(os.path.dirname(__file__), "..", "..", "data", "raw")
+# Define the output folder for CSV files
+DATA_FOLDER = r"C:\Users\nicol\Downloads\ai_proj\tennis-predictor\data"
 os.makedirs(DATA_FOLDER, exist_ok=True)  # Ensure the folder exists
 
 # Function to scrape a single URL
 def scrape_tennis_data(url, output_filename):
-    # 1. Set up Selenium WebDriver with options
-    from selenium.webdriver.chrome.options import Options
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run in background
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    
-    driver = None
-    try:
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.get(url)
+    # 1. Set up Selenium WebDriver
+    driver = webdriver.Chrome()  # Ensure you have ChromeDriver installed and in PATH
+    driver.get(url)
 
-        # 2. Wait for the table to load
-        wait = WebDriverWait(driver, 10)
-        wait.until(EC.presence_of_element_located((By.ID, "reportable")))
+    # 2. Wait for the Page to Load
+    time.sleep(3)  # Adjust if necessary
 
-        # 3. Parse the Rendered HTML with BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
+    # 3. Parse the Rendered HTML with BeautifulSoup
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
 
-        # 4. Locate the Outer Table (maintable)
-        maintable = soup.find('table', {'id': 'reportable'})
-        if not maintable:
-            raise Exception("Table with id 'reportable' not found on the page.")
+    # 4. Locate the Outer Table (maintable)
+    maintable = soup.find('table', {'id': 'reportable'})
+    if not maintable:
+        driver.quit()
+        raise Exception("Table with id 'reportable' not found on the page.")
 
-        # 6. Extract Headers Dynamically
-        headers = []
-        thead = maintable.find('thead')
-        if thead:
-            header_row = thead.find('tr')
-            if header_row:
-                for th in header_row.find_all('th'):
-                    headers.append(th.get_text(strip=True))
-        
-        if not headers:
-            raise Exception("Header row not found in the table.")
+    # # 5. Locate the Inner Table (matches) Inside maintable
+    # matches_table = maintable.find('table', {'id': 'matches'})
+    # if not matches_table:
+    #     driver.quit()
+    #     raise Exception("Table with id 'matches' not found inside 'maintable'.")
 
-        print(f"Extracted Headers for {url}: {headers}")
+    # 6. Extract Headers Dynamically
+    headers = []
+    header_row = maintable.find('thead').find('tr')  # Locate the header row
+    if header_row:
+        for th in header_row.find_all('th'):
+                            headers.append(th.get_text(strip=True))  # Directly extract the text inside the <th>
+    else:
+        driver.quit()
+        raise Exception("Header row not found in the table.")
 
-        # 7. Extract Table Rows
-        rows_data = []
-        tbody = maintable.find('tbody')
-        if tbody:
-            for row in tbody.find_all('tr'):
-                cells = row.find_all('td')
-                if cells:
-                    row_values = [cell.get_text(strip=True) for cell in cells]
-                    if row_values:  # Only add non-empty rows
-                        rows_data.append(row_values)
+    print(f"Extracted Headers for {url}: {headers}")
 
-        # 8. Write to CSV in the 'data' folder
-        csv_filename = os.path.join(DATA_FOLDER, output_filename)
-        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-            writer.writerows(rows_data)
+    # 7. Extract Table Rows
+    rows_data = []
+    for row in maintable.find('tbody').find_all('tr'):  # Locate all rows in the table body
+        cells = row.find_all('td')  # Data is likely in <td> tags
+        if not cells:
+            continue
+        row_values = [cell.get_text(strip=True) for cell in cells]
+        rows_data.append(row_values)
 
-        print(f"Data successfully written to {csv_filename}")
-        print(f"Scraped {len(rows_data)} rows of data")
+    # 8. Write to CSV in the 'data' folder
+    csv_filename = os.path.join(DATA_FOLDER, output_filename)
+    with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)      # Write dynamically extracted header row
+        writer.writerows(rows_data)   # Write data rows
 
-    except Exception as e:
-        print(f"Error scraping {url}: {str(e)}")
-    finally:
-        # 9. Close the WebDriver
-        if driver is not None:
-            driver.quit()
+    print(f"Data successfully written to {csv_filename}")
+
+    # 9. Close the WebDriver
+    driver.quit()
 
 # List of URLs to scrape
 urls = [
@@ -89,10 +75,7 @@ urls = [
 ]
 
 # Scrape each URL and save to a separate CSV file
-if __name__ == "__main__":
-    filenames = ["serve_leaders.csv", "return_leaders.csv", "rally_leaders.csv", "tactics_leaders.csv"]
-    
-    for url, filename in zip(urls, filenames):
-        print(f"Scraping {url}...")
-        scrape_tennis_data(url, filename)
-        time.sleep(2)  # Be respectful to the server
+scrape_tennis_data(urls[0], "serve_leaders.csv")
+scrape_tennis_data(urls[1], "return_leaders.csv")
+scrape_tennis_data(urls[2], "rally_leaders.csv")
+scrape_tennis_data(urls[3], "tactics_leaders.csv")
