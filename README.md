@@ -8,7 +8,7 @@ A complete machine learning pipeline that predicts ATP tennis match outcomes usi
 
 ---
 
-## 🎯 Project Overview
+##  Project Overview
 
 This system predicts the win probability for ATP tennis matches by combining:
 - **Elo Rating System** - Surface-specific player strength ratings (Hard, Clay, Grass, Carpet)
@@ -287,7 +287,7 @@ Creates comprehensive feature matrix with:
 
 ---
 
-## 🛠️ Technology Stack
+##  Technology Stack
 
 | Component | Technology |
 |-----------|-----------|
@@ -328,7 +328,7 @@ Creates comprehensive feature matrix with:
 
 ---
 
-## 📝 Configuration
+##  Configuration
 
 Configuration files in `configs/` allow easy customization:
 
@@ -351,7 +351,7 @@ calibration: platt
 ---
 
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **Data Sources:**
   - [Tennis Abstract](http://www.tennisabstract.com/) - Player statistics
