@@ -1,4 +1,4 @@
-# 🎾 ATP Tennis Match Predictor
+#  ATP Tennis Match Predictor
 
 A complete machine learning pipeline that predicts ATP tennis match outcomes using historical data, player ratings, and advanced statistical features. This project demonstrates end-to-end ML engineering from web scraping to model training.
 
@@ -26,7 +26,7 @@ This system predicts the win probability for ATP tennis matches by combining:
 
 ---
 
-## 📊 Pipeline Architecture
+##  Pipeline Architecture
 
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
